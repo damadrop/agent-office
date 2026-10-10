@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { ChatPanel } from './components/ChatPanel';
 import { TaskBoard } from './components/TaskBoard';
 import { AgentInspector } from './components/AgentInspector';
@@ -9,8 +9,12 @@ import { HighlightsFeed } from './components/HighlightsFeed';
 import { AgentPulseBoard } from './components/AgentPulseBoard';
 import { RelationshipGraph } from './components/RelationshipGraph';
 import { EpisodeRecapPanel } from './components/EpisodeRecapPanel';
+import { useLiveAgents } from './hooks/useLiveAgents';
 
 export function App() {
+    const agents = useLiveAgents();
+    const [selectedId, setSelectedId] = useState<string | null>(null);
+    const selected = agents.find(a => a.id === selectedId) || agents[0];
     return (
         <>
             <div style={{ position: 'absolute', bottom: 20, left: 20, color: 'white', backgroundColor: 'rgba(10,10,30,0.85)', padding: '12px 16px', borderRadius: '10px', zIndex: 10, border: '1px solid rgba(108,92,231,0.3)' }}>
@@ -19,7 +23,12 @@ export function App() {
             </div>
             <ChatPanel />
             <TaskBoard />
-            <AgentInspector agent={{ name: 'Alice', role: 'Engineer', status: 'Idle', currentTask: 'Write Scaffold' }} />
+            <AgentInspector
+                agent={selected ? { name: selected.name, role: 'Crew', status: selected.action, currentTask: selected.currentTask } : undefined}
+                agents={agents}
+                selectedId={selected?.id}
+                onSelect={setSelectedId}
+            />
             <LayoutEditor />
             <SystemLog />
             <ViralControlPanel />

@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { getColyseusRoom } from '../game/Game';
+import { useLiveAgents } from '../hooks/useLiveAgents';
 
 interface TaskItem {
     id: number;
@@ -12,6 +13,7 @@ export function TaskBoard() {
     const [tasks, setTasks] = useState<TaskItem[]>([]);
     const [newTask, setNewTask] = useState('');
     const [targetAgent, setTargetAgent] = useState('auto');
+    const agents = useLiveAgents();
 
     useEffect(() => {
         const checkRoom = setInterval(() => {
@@ -101,8 +103,9 @@ export function TaskBoard() {
                         }}
                     >
                         <option value="auto">🤖 Auto-assign</option>
-                        <option value="alice">Alice (Engineer)</option>
-                        <option value="bob">Bob (PM)</option>
+                        {agents.map(a => (
+                            <option key={a.id} value={a.id}>{a.name}</option>
+                        ))}
                     </select>
                     <button type="submit" style={{
                         padding: '6px 14px', borderRadius: 6, border: 'none',
