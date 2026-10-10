@@ -24,8 +24,14 @@ function resolveWsEndpoint(): string {
         : undefined;
     if (globalEndpoint && globalEndpoint.trim()) return globalEndpoint.trim();
     if (typeof window !== 'undefined') {
-        const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-        return `${protocol}//${window.location.hostname}:3000`;
+        const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+        const { hostname, port } = window.location;
+        if (port === '5173' || port === '5174') {
+            // Local vite dev/preview: the game server runs separately on :3000.
+            return `${wsProtocol}//${hostname}:3000`;
+        }
+        // Single-service hosting (Render, etc.): the game server shares this origin.
+        return port ? `${wsProtocol}//${hostname}:${port}` : `${wsProtocol}//${hostname}`;
     }
     return 'ws://localhost:3000';
 }
