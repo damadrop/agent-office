@@ -11,3 +11,6 @@ services:
       # Set this in the Render dashboard (Environment) to give the agents brains:
       # - key: OPENROUTER_API_KEY
       #   value: sk-or-v1-xxxx  (from https://openrouter.ai/keys)
+      # Private office password (the browser deploy sets this):
+      - key: OFFICE_PASSWORD
+        value: harbor-boss-808
