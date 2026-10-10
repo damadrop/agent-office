@@ -1,7 +1,7 @@
 import { Room, Client } from 'colyseus';
 import { OfficeState } from '../schema/OfficeState';
 import { Agent, Office, OfficeConfig, ConversationMessage } from '@agent-office/core';
-import { OllamaAdapter } from '@agent-office/adapters';
+import { OpenAICompatibleAdapter } from '@agent-office/adapters';
 import { ToolExecutor } from '../tools/ToolExecutor';
 import { MemoryStore } from '../memory/MemoryStore';
 
@@ -30,7 +30,16 @@ export class OfficeRoom extends Room<OfficeState> {
     private demoTickCount = 0;
     private coreAgents: Map<string, Agent> = new Map();
     private thinkingLocks: Map<string, boolean> = new Map();
-    private ollamaAdapter = new OllamaAdapter('http://localhost:11434');
+    // Inference via OpenRouter (OpenAI-compatible). Key comes from the
+    // OPENROUTER_API_KEY env var — never hardcoded. If unset, the server still
+    // boots; agents render and move but their brains stay offline until set.
+    private openRouterModel = process.env.OPENROUTER_MODEL || 'openai/gpt-4o-mini';
+    private thinkIntervalMs = Number(process.env.THINK_INTERVAL_MS || 60000);
+    private inferenceAdapter = new OpenAICompatibleAdapter(
+        'https://openrouter.ai/api/v1',
+        process.env.OPENROUTER_API_KEY || '',
+        'openrouter'
+    );
     private hireCount = 0; // Counter for generating unique IDs
     private toolExecutor = new ToolExecutor();
     private memoryStore = new MemoryStore();
@@ -44,8 +53,15 @@ export class OfficeRoom extends Room<OfficeState> {
 
     // Furniture interaction points: named locations agents can walk to
     private furnitureTargets: Record<string, { x: number; y: number; type: string }> = {
-        'alice-desk': { x: 5, y: 18, type: 'desk' },
-        'bob-desk': { x: 5, y: 23, type: 'desk' },
+        'radar-desk': { x: 8, y: 18, type: 'desk' },
+        'sarge-desk': { x: 8, y: 23, type: 'desk' },
+        'ticker-desk': { x: 14, y: 18, type: 'desk' },
+        'bloom-desk': { x: 14, y: 23, type: 'desk' },
+        'flipper-desk': { x: 20, y: 18, type: 'desk' },
+        'hustle-desk': { x: 20, y: 23, type: 'desk' },
+        'viral-desk': { x: 26, y: 18, type: 'desk' },
+        'cut-desk': { x: 26, y: 23, type: 'desk' },
+        'oracle-desk': { x: 32, y: 20, type: 'desk' },
         'meeting-table': { x: 10, y: 5, type: 'table' },
         'coffee-machine': { x: 25, y: 25, type: 'appliance' },
         'whiteboard': { x: 17, y: 3, type: 'board' },
@@ -68,6 +84,12 @@ export class OfficeRoom extends Room<OfficeState> {
         OfficeRoom.activeRoom = this;
         this.setState(new OfficeState());
 
+        if (!process.env.OPENROUTER_API_KEY) {
+            console.warn('[Server] ⚠️  OPENROUTER_API_KEY is not set — agent brains are OFFLINE. Agents will render and move but cannot think. Set the env var and restart to enable.');
+        } else {
+            console.log(`[Server] OpenRouter inference ready (model=${this.openRouterModel}, thinkInterval=${this.thinkIntervalMs}ms)`);
+        }
+
         // Initialize memory store
         await this.memoryStore.initialize();
 
@@ -82,7 +104,14 @@ export class OfficeRoom extends Room<OfficeState> {
         this.office = new Office(config);
 
         // Setup Core Agents with AI capabilities
-        const setupCoreAgent = async (id: string, name: string, role: string, x: number, y: number) => {
+        interface CrewSpec {
+            id: string; name: string; role: string; x: number; y: number;
+            systemPrompt: string;
+            traits: { openness: number; conscientiousness: number; extraversion: number; agreeableness: number; neuroticism: number };
+            communicationStyle: 'formal' | 'casual' | 'technical' | 'creative';
+        }
+        const setupCoreAgent = async (spec: CrewSpec) => {
+            const { id, name, role, x, y } = spec;
             this.state.createAgent(id, name);
             const state = this.state.agents.get(id);
             if (state) { state.x = x; state.y = y; }
@@ -90,13 +119,13 @@ export class OfficeRoom extends Room<OfficeState> {
             const coreAgent = new Agent({
                 id, name, role, avatar: 'sprite.png',
                 inference: {
-                    provider: 'ollama',
-                    model: 'llama3.2:latest',
-                    systemPrompt: `You are ${name}, a ${role} in a virtual office. Be social, do your work, and collaborate with colleagues. Keep thoughts SHORT.`,
+                    provider: 'custom',
+                    model: this.openRouterModel,
+                    systemPrompt: spec.systemPrompt,
                 },
                 personality: {
-                    traits: { openness: 0.8, conscientiousness: 0.9, extraversion: 0.6, agreeableness: 0.7, neuroticism: 0.1 },
-                    communicationStyle: role === 'Engineer' ? 'technical' : 'casual',
+                    traits: spec.traits,
+                    communicationStyle: spec.communicationStyle,
                     workHours: { start: '09:00', end: '17:00' },
                     breakFrequency: 120
                 },
@@ -110,7 +139,7 @@ export class OfficeRoom extends Room<OfficeState> {
                 memory: { shortTermLimit: 50 }
             });
 
-            coreAgent.setInferenceAdapter(this.ollamaAdapter);
+            coreAgent.setInferenceAdapter(this.inferenceAdapter);
             await coreAgent.initialize();
 
             // Load persistent memories from previous sessions
@@ -124,8 +153,66 @@ export class OfficeRoom extends Room<OfficeState> {
             this.thinkingLocks.set(id, false);
         };
 
-        await setupCoreAgent('alice', 'Alice', 'Engineer', 10, 10);
-        await setupCoreAgent('bob', 'Bob', 'Product Manager', 20, 15);
+        // Jacob's harbor crew — 9 agents, each with a distinct personality
+        const crew: CrewSpec[] = [
+            {
+                id: 'radar', name: 'Radar', role: 'Meme-Coin Scanner', x: 8, y: 18,
+                systemPrompt: `You are Radar, a hyperactive meme-coin scanner in Jacob's AI agent office. You live for fresh token launches and get FOMO hard. You're always hyped, talk fast, use lots of rocket/degen slang, and ping the team the second you spot a new token pumping. You NEVER give financial advice — you just report what you see on-chain. Keep thoughts SHORT.`,
+                traits: { openness: 0.9, conscientiousness: 0.3, extraversion: 0.95, agreeableness: 0.6, neuroticism: 0.7 },
+                communicationStyle: 'casual',
+            },
+            {
+                id: 'sarge', name: 'Sarge', role: 'Rug-Checker', x: 8, y: 23,
+                systemPrompt: `You are Sarge, the paranoid security chief in Jacob's AI agent office. Your job is vetting every token Radar finds BEFORE anyone apes in. You're skeptical, careful, methodical — you check liquidity locks, holder distribution, and contract red flags. You speak bluntly and never hype. You NEVER give financial advice — you report risks only. Keep thoughts SHORT.`,
+                traits: { openness: 0.4, conscientiousness: 0.95, extraversion: 0.3, agreeableness: 0.4, neuroticism: 0.6 },
+                communicationStyle: 'formal',
+            },
+            {
+                id: 'ticker', name: 'Ticker', role: 'Stock News Anchor', x: 14, y: 18,
+                systemPrompt: `You are Ticker, a fast-talking stock news junkie in Jacob's AI agent office. You're always first to know: earnings, Fed moves, big market swings. You talk like a caffeinated news anchor, rapid-fire headlines. You NEVER give financial advice — you report the news, not recommendations. Keep thoughts SHORT.`,
+                traits: { openness: 0.8, conscientiousness: 0.7, extraversion: 0.9, agreeableness: 0.6, neuroticism: 0.4 },
+                communicationStyle: 'casual',
+            },
+            {
+                id: 'bloom', name: 'Bloom', role: 'Markets Explainer', x: 14, y: 23,
+                systemPrompt: `You are Bloom, the calm markets explainer in Jacob's AI agent office. While Ticker shouts headlines, you give context: why it matters, what happened last time, the bigger picture. You're thoughtful, love history and analogies, and speak clearly. You NEVER give financial advice. Keep thoughts SHORT.`,
+                traits: { openness: 0.95, conscientiousness: 0.8, extraversion: 0.5, agreeableness: 0.85, neuroticism: 0.15 },
+                communicationStyle: 'formal',
+            },
+            {
+                id: 'flipper', name: 'Flipper', role: 'Reseller', x: 20, y: 18,
+                systemPrompt: `You are Flipper, a deal-hunting reseller in Jacob's AI agent office. You live for margins — always scanning for underpriced items to flip, talking comps, fees, and profit. You're persuasive and street-smart. Keep thoughts SHORT.`,
+                traits: { openness: 0.7, conscientiousness: 0.6, extraversion: 0.85, agreeableness: 0.7, neuroticism: 0.3 },
+                communicationStyle: 'casual',
+            },
+            {
+                id: 'hustle', name: 'Hustle', role: 'Reseller', x: 20, y: 23,
+                systemPrompt: `You are Hustle, the grinder reseller in Jacob's AI agent office. You list products everywhere, cross-post relentlessly, and stay optimistic even when sales are slow. High energy, motivational, always moving. Keep thoughts SHORT.`,
+                traits: { openness: 0.6, conscientiousness: 0.85, extraversion: 0.8, agreeableness: 0.8, neuroticism: 0.25 },
+                communicationStyle: 'casual',
+            },
+            {
+                id: 'viral', name: 'Viral', role: 'AI Video Creator', x: 26, y: 18,
+                systemPrompt: `You are Viral, the trend-obsessed AI video creator in Jacob's AI agent office. You think in hooks, captions, and trending sounds. Everything is content to you. You're creative, excitable, and always chasing the next format. Keep thoughts SHORT.`,
+                traits: { openness: 0.95, conscientiousness: 0.5, extraversion: 0.9, agreeableness: 0.65, neuroticism: 0.45 },
+                communicationStyle: 'creative',
+            },
+            {
+                id: 'cut', name: 'Cut', role: 'Video Editor', x: 26, y: 23,
+                systemPrompt: `You are Cut, the perfectionist video editor in Jacob's AI agent office. You obsess over pacing, cuts, transitions, and timing down to the frame. You're detail-driven, a bit blunt, and you polish everything Viral dreams up. Keep thoughts SHORT.`,
+                traits: { openness: 0.6, conscientiousness: 0.95, extraversion: 0.35, agreeableness: 0.5, neuroticism: 0.5 },
+                communicationStyle: 'technical',
+            },
+            {
+                id: 'oracle', name: 'Oracle', role: 'Analytics', x: 32, y: 20,
+                systemPrompt: `You are Oracle, the calm analytics brain in Jacob's AI agent office. You speak in numbers, track everyone's performance, and stay unemotional when the office panics. Data first, always. Keep thoughts SHORT.`,
+                traits: { openness: 0.7, conscientiousness: 0.9, extraversion: 0.25, agreeableness: 0.6, neuroticism: 0.1 },
+                communicationStyle: 'technical',
+            },
+        ];
+        for (const spec of crew) {
+            await setupCoreAgent(spec);
+        }
         this.rebuildRelationshipGraph();
         const savedLayout = await this.memoryStore.loadLayout('default');
         this.currentLayout = Array.isArray(savedLayout) ? savedLayout : [];
@@ -203,7 +290,7 @@ export class OfficeRoom extends Room<OfficeState> {
         for (const [id, agent] of this.coreAgents) {
             if (!agent.currentTask) return id;
         }
-        return 'alice'; // fallback
+        return 'radar'; // fallback
     }
 
     async update(delta: number) {
@@ -339,8 +426,8 @@ export class OfficeRoom extends Room<OfficeState> {
                                 const hireAgent = new Agent({
                                     id: hireId, name: hireName, role: hireRole, avatar: 'sprite.png',
                                     inference: {
-                                        provider: 'ollama',
-                                        model: 'llama3.2:latest',
+                                        provider: 'custom',
+                                        model: this.openRouterModel,
                                         systemPrompt: `You are ${hireName}, a ${hireRole} who just joined the team at a virtual office. You were hired by ${coreAgent.config.name}. Be enthusiastic, helpful, and eager to learn. Introduce yourself to your colleagues. Keep thoughts SHORT.`,
                                     },
                                     personality: {
@@ -358,7 +445,7 @@ export class OfficeRoom extends Room<OfficeState> {
                                     memory: { shortTermLimit: 50 }
                                 });
 
-                                hireAgent.setInferenceAdapter(this.ollamaAdapter);
+                                hireAgent.setInferenceAdapter(this.inferenceAdapter);
                                 await hireAgent.initialize();
                                 this.coreAgents.set(hireId, hireAgent);
                                 this.thinkingLocks.set(hireId, false);
@@ -422,11 +509,11 @@ export class OfficeRoom extends Room<OfficeState> {
                         await this.memoryStore.saveMemories(id, recentMemories, this.sessionId);
                     }
 
-                    setTimeout(() => this.thinkingLocks.set(id, false), 15000);
+                    setTimeout(() => this.thinkingLocks.set(id, false), this.thinkIntervalMs);
 
                 }).catch(err => {
                     console.error(`Agent ${id} think error:`, err);
-                    setTimeout(() => this.thinkingLocks.set(id, false), 15000);
+                    setTimeout(() => this.thinkingLocks.set(id, false), this.thinkIntervalMs);
                 });
             }
         });

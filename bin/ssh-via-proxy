@@ -1,0 +1,16 @@
+#!/bin/bash
+# ssh-via-proxy: runs ssh with its connection routed through the egress HTTP proxy.
+# Usage: ssh-via-proxy [ssh args...] -- %h %p  (as ProxyCommand, ssh appends host/port)
+# Or directly: ssh-via-proxy -o ProxyCommand=... — simplest is to use it AS the ProxyCommand:
+#   ssh -o "ProxyCommand=$DIR/bin/ssh-via-proxy %h %p" ...
+set -u
+HOST="$1"; PORT="$2"
+# Parse proxy creds from HTTPS_PROXY env without printing them
+eval "$(python3 -c "
+import os, urllib.parse
+u = urllib.parse.urlparse(os.environ.get('HTTPS_PROXY',''))
+print('PHOST=' + u.hostname)
+print('PPORT=' + str(u.port or 3128))
+print('PAUTH=' + urllib.parse.unquote(u.username or '') + ':' + urllib.parse.unquote(u.password or ''))
+")"
+exec socat - "PROXY:${PHOST}:${HOST}:${PORT},proxyport=${PPORT},proxyauth=${PAUTH}"

@@ -1,4 +1,5 @@
 import express from 'express';
+import path from 'path';
 import { Server } from 'colyseus';
 import { createServer } from 'http';
 import { OfficeRoom } from './rooms/OfficeRoom';
@@ -40,6 +41,19 @@ const colyseusServer = new Server({
 
 // Define Rooms
 colyseusServer.define('office', OfficeRoom);
+
+// Serve the built UI (packages/ui/dist) from the same port so the whole
+// office runs as a single service. API and Colyseus matchmake routes are
+// excluded from the SPA fallback.
+const uiDist = path.resolve(__dirname, '../../ui/dist');
+app.use(express.static(uiDist));
+app.use((req, res, next) => {
+    if (req.method !== 'GET') return next();
+    if (req.path.startsWith('/api/') || req.path.startsWith('/matchmake')) return next();
+    res.sendFile(path.join(uiDist, 'index.html'), (err) => {
+        if (err) next();
+    });
+});
 
 // Start listening
 const PORT = Number(process.env.PORT || 3000);

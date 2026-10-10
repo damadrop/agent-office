@@ -1,0 +1,19 @@
+#!/bin/bash
+# lt-relay: bridges a localtunnel server endpoint to a local port via the egress HTTP proxy.
+# Usage: lt-relay <local_port> <lt_remote_port> <logfile>
+# localtunnel's wire protocol is a plain bidirectional TCP pipe (no handshake),
+# so one socat per connection slot is a complete tunnel client.
+set -u
+LOCAL_PORT="$1"; REMOTE_PORT="$2"; LOG="$3"
+eval "$(python3 -c "
+import os, urllib.parse
+u = urllib.parse.urlparse(os.environ.get('HTTPS_PROXY',''))
+print('PHOST=' + u.hostname)
+print('PPORT=' + str(u.port or 3128))
+print('PAUTH=' + urllib.parse.unquote(u.username or '') + ':' + urllib.parse.unquote(u.password or ''))
+")"
+# 2 connection slots (matches max_conn_count)
+for i in 1 2; do
+  setsid nohup socat "TCP:127.0.0.1:${LOCAL_PORT}" "PROXY:${PHOST}:localtunnel.me:${REMOTE_PORT},proxyport=${PPORT},proxyauth=${PAUTH}" >> "$LOG" 2>&1 < /dev/null &
+done
+echo "relayed 127.0.0.1:${LOCAL_PORT} <-> localtunnel.me:${REMOTE_PORT} (2 slots)"
