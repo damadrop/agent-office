@@ -6,3 +6,4 @@ logs/
 .env
 bin/bore
 bin/cloudflared
+*.tsbuildinfo

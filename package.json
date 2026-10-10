@@ -6,7 +6,7 @@
     "examples/*"
   ],
   "scripts": {
-    "build": "npm run build --workspaces --if-present",
+    "build": "npm run build -w @agent-office/core && npm run build -w @agent-office/adapters && npm run build -w @agent-office/server && npm run build -w @agent-office/ui",
     "test": "npm run test --workspaces --if-present",
     "lint": "eslint . --ext .ts,.tsx",
     "format": "prettier --write \"**/*.{ts,tsx,js,jsx,json,md}\"",
