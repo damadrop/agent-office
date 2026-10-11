@@ -22,7 +22,7 @@ export class OpenAICompatibleAdapter implements InferenceAdapter {
             }
         })) : undefined;
 
-        const response = await fetch(`${this.baseUrl}/v1/chat/completions`, {
+        const response = await fetch(`${this.baseUrl}/chat/completions`, {
             method: 'POST',
             headers: {
                 'Authorization': `Bearer ${this.apiKey}`,
