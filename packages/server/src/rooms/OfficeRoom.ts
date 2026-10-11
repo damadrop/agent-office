@@ -35,6 +35,11 @@ export class OfficeRoom extends Room<OfficeState> {
     // boots; agents render and move but their brains stay offline until set.
     private openRouterModel = process.env.OPENROUTER_MODEL || 'openai/gpt-4o-mini';
     private thinkIntervalMs = Number(process.env.THINK_INTERVAL_MS || 60000);
+    // Daily LLM safety cap: DAILY_LLM_CAP=0 (default) means unlimited.
+    // Set to e.g. 45 on a free OpenRouter key so usage can never exceed the free tier.
+    private dailyLlmCap = Number(process.env.DAILY_LLM_CAP || 0);
+    private llmCallsToday = 0;
+    private llmCapDay = new Date().toISOString().slice(0, 10);
     private inferenceAdapter = new OpenAICompatibleAdapter(
         'https://openrouter.ai/api/v1',
         process.env.OPENROUTER_API_KEY || '',
@@ -226,6 +231,18 @@ export class OfficeRoom extends Room<OfficeState> {
         this.onMessage('chat', (client, message) => {
             console.log(`Chat from ${client.sessionId}: ${message.text}`);
             this.broadcast('chat', { sender: 'User', text: message.text });
+            // Deliver the user's message to every agent so they can react/think.
+            const text = String(message.text || '').slice(0, 500);
+            if (text.trim()) {
+                this.coreAgents.forEach((agent) => {
+                    agent.receiveMessage({
+                        from: 'User',
+                        to: agent.config.name,
+                        content: text,
+                        timestamp: new Date().toISOString(),
+                    });
+                });
+            }
         });
 
         this.onMessage('start-scenario', (client, message) => {
@@ -293,6 +310,22 @@ export class OfficeRoom extends Room<OfficeState> {
         return 'radar'; // fallback
     }
 
+    /** Returns true if an LLM call is allowed under the daily cap (and counts it). */
+    private checkLlmBudget(): boolean {
+        if (!process.env.OPENROUTER_API_KEY) return false; // brains offline anyway
+        if (this.dailyLlmCap <= 0) return true;
+        const today = new Date().toISOString().slice(0, 10);
+        if (today !== this.llmCapDay) {
+            this.llmCapDay = today;
+            this.llmCallsToday = 0;
+        }
+        if (this.llmCallsToday >= this.dailyLlmCap) {
+            return false;
+        }
+        this.llmCallsToday++;
+        return true;
+    }
+
     async update(delta: number) {
         if (Math.random() < 0.02) {
             console.log(`[Server] Agents: ${this.state.agents.size} | Session: ${this.sessionId}`);
@@ -300,9 +333,18 @@ export class OfficeRoom extends Room<OfficeState> {
 
         this.state.officeTime = new Date().toISOString();
 
-        // ─── AGENT THINK CYCLE ───
+        // ─── AGENT THINK CYCLE (event-driven: only think when something happened) ───
         this.coreAgents.forEach((coreAgent, id) => {
             if (!this.thinkingLocks.get(id)) {
+                // Free-tier friendly: skip thinking unless the agent has unread
+                // messages or an active task. Idle agents just wander (no LLM cost).
+                const hasUnreads = coreAgent.getUnreadMessages().length > 0;
+                const hasTask = !!coreAgent.currentTask;
+                if (!hasUnreads && !hasTask) return;
+
+                // Daily LLM safety cap (DAILY_LLM_CAP=0 means unlimited).
+                if (!this.checkLlmBudget()) return;
+
                 this.thinkingLocks.set(id, true);
 
                 const agentState = this.state.agents.get(id);
@@ -331,6 +373,23 @@ export class OfficeRoom extends Room<OfficeState> {
 
                     if (decision.thought) {
                         agentState.thought = decision.thought;
+                    }
+
+                    // ─── TASK COMPLETION: agent went idle with a task → mark done ───
+                    if (decision.action === 'idle' && coreAgent.currentTask) {
+                        const doneTask = coreAgent.currentTask;
+                        coreAgent.currentTask = null as any;
+                        agentState.currentTask = '';
+                        this.broadcast('chat', {
+                            sender: 'System',
+                            text: `✅ ${coreAgent.config.name} completed "${doneTask}"`
+                        });
+                        this.broadcast('task-update', {
+                            agentId: id,
+                            agentName: coreAgent.config.name,
+                            task: doneTask,
+                            status: 'completed'
+                        });
                     }
 
                     // ─── HANDLE TALK ACTION (Agent-to-Agent) ───
@@ -621,6 +680,14 @@ export class OfficeRoom extends Room<OfficeState> {
         this.state.agents.forEach((agent, id) => {
             agent.momentum = this.clamp01(agent.momentum + 0.15);
             agent.riskLevel = this.clamp01(agent.riskLevel + 0.1);
+            // Nudge every agent so they react to the scenario (event-driven think).
+            const coreAgent = this.coreAgents.get(id);
+            coreAgent?.receiveMessage({
+                from: '🎬 Producer',
+                to: coreAgent.config.name,
+                content: `Scenario started: ${scenarioName}. React in character, keep it SHORT.`,
+                timestamp: new Date().toISOString(),
+            });
             if (Math.random() < 0.4) {
                 this.emitHighlight(
                     'character_arc',
@@ -668,6 +735,14 @@ export class OfficeRoom extends Room<OfficeState> {
             agent.mood = this.clamp01(agent.mood + selected.moodDelta + (Math.random() - 0.5) * 0.08);
             agent.riskLevel = this.clamp01(agent.riskLevel + selected.riskDelta + Math.random() * 0.08);
             agent.momentum = this.clamp01(agent.momentum + selected.momentumDelta + (Math.random() - 0.5) * 0.05);
+            // Nudge every agent so they react to the chaos (event-driven think).
+            const coreAgent = this.coreAgents.get(id);
+            coreAgent?.receiveMessage({
+                from: '⚠️ Chaos Engine',
+                to: coreAgent.config.name,
+                content: `CHAOS EVENT: ${selected.label} just hit the office! React in character, keep it SHORT.`,
+                timestamp: new Date().toISOString(),
+            });
             if (agent.riskLevel > 0.75) {
                 this.emitHighlight(
                     'high_risk',
