@@ -37,7 +37,8 @@ export class OpenAICompatibleAdapter implements InferenceAdapter {
         });
 
         if (!response.ok) {
-            throw new Error(`OpenAI Error: ${response.statusText}`);
+            const errBody = await response.text().catch(() => '');
+            throw new Error(`OpenAI Error ${response.status}: ${errBody.slice(0, 300) || response.statusText}`);
         }
 
         const data = await response.json();
