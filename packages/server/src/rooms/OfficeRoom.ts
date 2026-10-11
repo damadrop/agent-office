@@ -430,6 +430,19 @@ export class OfficeRoom extends Room<OfficeState> {
                                 timestamp: this.state.officeTime,
                                 importance: 0.7
                             }, this.sessionId);
+                        } else {
+                            // Target wasn't another agent (e.g. replying to the user):
+                            // say it to the room so it's visible in Office Chat.
+                            this.broadcast('chat', {
+                                sender: coreAgent.config.name,
+                                text: `💬 ${decision.message}`
+                            });
+                            this.emitHighlight(
+                                'conversation',
+                                `${coreAgent.config.name} spoke up`,
+                                decision.message.slice(0, 120),
+                                id
+                            );
                         }
 
                         coreAgent.clearInbox(); // Clear after processing
